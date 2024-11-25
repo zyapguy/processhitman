@@ -15,10 +15,14 @@
 #define CONFIG_FILE_PATH "/.config/process_hitman"
 
 bool hookEnabled = false;
+bool isMainLoopRunning = false;
 GtkWidget *button, *checkbox1, *checkbox2, *checkbox3;
-Display *display;
+Display *display = nullptr;
+GMainLoop *main_loop = nullptr;
 
 pid_t GetActiveWindowPID() {
+    if (!display) return 0;
+    
     Atom prop = XInternAtom(display, "_NET_WM_PID", True);
     Window window;
     int revert;
@@ -53,7 +57,7 @@ void KillProcess(pid_t pid) {
 
 void ToggleHook(GtkButton *btn) {
     hookEnabled = !hookEnabled;
-    gtk_button_set_label(btn, hookEnabled ? "Disable Alt+F5" : "Enable Alt+F5");
+    gtk_button_set_label(GTK_BUTTON(btn), hookEnabled ? "Disable Alt+F5" : "Enable Alt+F5");
 }
 
 gboolean OnKeyPress() {
@@ -90,7 +94,9 @@ void ShutdownFunction() {
         configFile.close();
     }
 
-    gtk_main_quit();
+    if (main_loop && g_main_loop_is_running(main_loop)) {
+        g_main_loop_quit(main_loop);
+    }
 }
 
 void LoadCheckboxStates() {
@@ -137,41 +143,81 @@ void CreateUI(GtkWidget *window) {
     LoadCheckboxStates();
 }
 
+void CleanupResources() {
+    if (display) {
+        XCloseDisplay(display);
+        display = nullptr;
+    }
+    if (main_loop) {
+        g_main_loop_unref(main_loop);
+        main_loop = nullptr;
+    }
+}
+
 int main(int argc, char **argv) {
-    gtk_init(&argc, &argv);
+    // Initialize GTK
+    if (!gtk_init_check(&argc, &argv)) {
+        std::cerr << "Failed to initialize GTK!" << std::endl;
+        return 1;
+    }
+
+    // Initialize X display
     display = XOpenDisplay(NULL);
     if (!display) {
         std::cerr << "Failed to open X display!" << std::endl;
         return 1;
     }
 
+    // Create main loop
+    main_loop = g_main_loop_new(NULL, FALSE);
+    if (!main_loop) {
+        std::cerr << "Failed to create main loop!" << std::endl;
+        CleanupResources();
+        return 1;
+    }
+
+    // Create main window
     GtkWidget *window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     gtk_window_set_title(GTK_WINDOW(window), "Process Hitman");
     gtk_window_set_default_size(GTK_WINDOW(window), 400, 200);
 
+    // Connect destroy signal
     g_signal_connect(window, "destroy", G_CALLBACK(ShutdownFunction), NULL);
     
+    // Create UI
     CreateUI(window);
     gtk_widget_show_all(window);
 
+    // Set up X11 key binding
     KeyCode key_f5 = XKeysymToKeycode(display, XStringToKeysym("F5"));
     XGrabKey(display, key_f5, Mod1Mask, DefaultRootWindow(display), True, GrabModeAsync, GrabModeAsync);
 
-    while (true) {
+    // Event handling
+    GSource *x11_source = g_idle_source_new();
+    g_source_set_callback(x11_source, []([[maybe_unused]]gpointer user_data) -> gboolean {
+        if (!display) return G_SOURCE_REMOVE;
+
         while (XPending(display)) {
             XEvent event;
             XNextEvent(display, &event);
 
             if (event.type == KeyPress) {
-                if (event.xkey.keycode == key_f5 && (event.xkey.state & Mod1Mask)) {
+                if (event.xkey.keycode == XKeysymToKeycode(display, XStringToKeysym("F5")) && 
+                    (event.xkey.state & Mod1Mask)) {
                     OnKeyPress();
                 }
             }
         }
+        return G_SOURCE_CONTINUE;
+    }, NULL, NULL);
+    g_source_attach(x11_source, g_main_loop_get_context(main_loop));
+    g_source_unref(x11_source);
 
-        g_main_context_iteration(NULL, FALSE);
-    }
+    // Run main loop
+    g_main_loop_run(main_loop);
 
-    XCloseDisplay(display);
+    // Cleanup
+    CleanupResources();
+    
     return 0;
 }
