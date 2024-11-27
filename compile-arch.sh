@@ -4,11 +4,11 @@
 OUTPUT="hitmanLinux"
 SOURCE="hitmanLinux.cpp"
 REQUIRED_PACKAGES=(
-    "g++"
-    "pkg-config"
-    "libgtk-3-dev"
-    "libx11-dev"
-    "libayatana-appindicator3-dev"
+    "gcc"
+    "pkgconf"
+    "gtk3"
+    "libx11"
+    "libayatana-appindicator"
 )
 
 # Compiler flags
@@ -58,8 +58,8 @@ check_and_install_packages() {
     echo "Checking for required packages..."
     
     # Check if we're running on a Debian-based system
-    if ! command_exists apt-get; then
-        error "This script requires apt-get package manager. Please install packages manually."
+    if ! command_exists pacman; then
+        error "This script requires pacman package manager. Please install packages manually."
     fi
 
     # Check for sudo privileges
@@ -69,7 +69,7 @@ check_and_install_packages() {
 
     local missing_packages=()
     for package in "${REQUIRED_PACKAGES[@]}"; do
-        if ! dpkg -s "$package" &>/dev/null; then
+        if ! pacman -Qi "$package" &>/dev/null; then
             missing_packages+=("$package")
         else
             success "$package is already installed."
@@ -79,8 +79,7 @@ check_and_install_packages() {
     # Install missing packages
     if [ ${#missing_packages[@]} -ne 0 ]; then
         echo "Installing missing packages: ${missing_packages[*]}"
-        sudo apt-get update || error "Failed to update package list"
-        sudo apt-get install -y "${missing_packages[@]}" || error "Failed to install packages"
+        sudo pacman -Sy --noconfirm "${missing_packages[@]}" || error "Failed to install packages"
     fi
 }
 
